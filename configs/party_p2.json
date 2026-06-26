@@ -1,0 +1,12 @@
+{
+  "party_id": "P2",
+  "host": "127.0.0.1",
+  "port": 8102,
+  "parameter_file": "data/p2_params.json",
+  "coordinator_url": "http://127.0.0.1:8000",
+  "party_urls": {
+    "P1": "http://127.0.0.1:8101",
+    "P2": "http://127.0.0.1:8102",
+    "P3": "http://127.0.0.1:8103"
+  }
+}

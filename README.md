@@ -37,9 +37,9 @@ average = (x1 + x2 + x3) / 3
 | 项目 | 方案 |
 | --- | --- |
 | 开发语言 | Python 3.10+ |
-| Web 框架 | FastAPI |
+| Web 服务 | Python 标准库 `http.server` |
 | HTTP 客户端 | httpx |
-| 数据验证 | Pydantic |
+| 数据验证 | Pydantic 兼容消息模型，未安装时使用内置校验 |
 | 自动测试 | pytest |
 | 秘密分享 | 三方加法秘密分享 |
 | 随机数生成 | `secrets.randbelow` |
@@ -204,10 +204,10 @@ P2 和 P3 只需要修改 `party_id`、`port` 和 `parameter_file`。
 分别启动协调器和三个参与方：
 
 ```bash
-python -m secure_agg.cli.coordinator
-python -m secure_agg.cli.party --config configs/party_p1.json
-python -m secure_agg.cli.party --config configs/party_p2.json
-python -m secure_agg.cli.party --config configs/party_p3.json
+PYTHONPATH=src python -m secure_agg.cli.coordinator --config configs/coordinator.json
+PYTHONPATH=src python -m secure_agg.cli.party --config configs/party_p1.json
+PYTHONPATH=src python -m secure_agg.cli.party --config configs/party_p2.json
+PYTHONPATH=src python -m secure_agg.cli.party --config configs/party_p3.json
 ```
 
 也可以使用脚本一次性启动：
