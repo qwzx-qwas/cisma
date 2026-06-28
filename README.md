@@ -126,26 +126,34 @@ secure-aggregation/
 
 详细模块职责、函数签名和测试要求见 [plan.md](plan.md)。
 
-## 安装环境
+## 环境准备
 
-创建虚拟环境：
+本项目建议使用 Python 3.10+。在一台新的电脑上拿到项目后，先进入项目根目录并创建虚拟环境：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
-安装依赖：
+Windows PowerShell 使用：
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+然后安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-开发阶段建议安装测试依赖后执行：
+确认依赖安装成功：
 
 ```bash
-pytest
+python -c "import httpx, pydantic, fastapi, uvicorn; print('deps ok')"
 ```
+
+如果看到 `deps ok`，说明运行环境已经准备好。
 
 ## 参数文件格式
 
@@ -199,9 +207,28 @@ data/p3_params.json
 
 P2 和 P3 只需要修改 `party_id`、`port` 和 `parameter_file`。
 
-## 启动服务
+## 快速运行
 
-分别启动协调器和三个参与方：
+最简单的完整演示流程如下：
+
+```bash
+python scripts/start_all.py
+python scripts/run_demo.py
+python scripts/stop_all.py
+```
+
+成功时 `run_demo.py` 会输出：
+
+```text
+Secure sum:     [6.0, 12.0, 18.0]
+Secure average: [2.0, 4.0, 6.0]
+Plain average:  [2.0, 4.0, 6.0]
+Maximum error:  0.000000
+
+Result: PASS
+```
+
+也可以手动分别启动协调器和三个参与方：
 
 ```bash
 PYTHONPATH=src python -m secure_agg.cli.coordinator --config configs/coordinator.json
@@ -210,51 +237,134 @@ PYTHONPATH=src python -m secure_agg.cli.party --config configs/party_p2.json
 PYTHONPATH=src python -m secure_agg.cli.party --config configs/party_p3.json
 ```
 
-也可以使用脚本一次性启动：
-
-```bash
-python scripts/start_all.py
-```
-
-停止服务：
+停止后台服务：
 
 ```bash
 python scripts/stop_all.py
 ```
 
-## 运行演示
+## 项目验收流程
 
-启动四个服务后执行：
+不看代码时，可以按下面流程确认项目是否完成。
+
+### 1. 环境验收
+
+```bash
+source .venv/bin/activate
+python --version
+python -c "import httpx, pydantic, fastapi, uvicorn; print('deps ok')"
+```
+
+期望 Python 版本为 3.10+，并输出 `deps ok`。
+
+### 2. 文件结构验收
+
+确认关键目录存在：
+
+```bash
+ls src/secure_agg/crypto
+ls src/secure_agg/core
+ls src/secure_agg/network
+ls src/secure_agg/schemas
+ls src/secure_agg/cli
+ls configs data scripts docs tests
+```
+
+应能看到：
+
+- 成员一模块：有限域、定点数、秘密分享。
+- 成员二模块：参数处理、聚合逻辑、轮次状态、消息模型。
+- 成员三模块：HTTP 客户端、参与方服务、协调器服务、CLI、启动脚本、配置和文档。
+
+### 3. 核心流程验收
+
+项目应满足以下流程：
+
+```text
+P1/P2/P3 参数文件存在
+每个参与方只读取自己的 data/*_params.json
+参数先调用 encode_vector
+再调用 split_vector
+每方收到三份 share 后调用 aggregate_received_shares
+协调器收到三份 aggregate share 后调用 reconstruct_aggregation
+最终输出 sum 和 average
+```
+
+对应重点文件：
+
+```text
+data/p1_params.json
+data/p2_params.json
+data/p3_params.json
+src/secure_agg/network/party_server.py
+src/secure_agg/network/coordinator_server.py
+```
+
+### 4. 服务启动验收
+
+```bash
+python scripts/start_all.py
+```
+
+期望输出：
+
+```text
+coordinator: OK
+P1: OK
+P2: OK
+P3: OK
+All services are running.
+```
+
+### 5. 演示结果验收
 
 ```bash
 python scripts/run_demo.py
 ```
 
-期望输出类似：
+期望输出包含：
 
 ```text
-==================================================
-Secure Aggregation Demo
-==================================================
-Participants: P1, P2, P3
-Vector length: 3
-
-[1/5] Creating aggregation round... OK
-[2/5] Distributing secret shares... OK
-[3/5] Computing local aggregate shares... OK
-[4/5] Reconstructing aggregation result... OK
-[5/5] Comparing with plaintext baseline... OK
-
 Secure sum:     [6.0, 12.0, 18.0]
 Secure average: [2.0, 4.0, 6.0]
 Plain average:  [2.0, 4.0, 6.0]
 Maximum error:  0.000000
-
 Result: PASS
-==================================================
 ```
 
-安全聚合结果与明文基线的最大绝对误差应不超过 `1e-5`。
+安全聚合结果与明文基线的最大绝对误差应不超过 `1e-5`。验收结束后停止服务：
+
+```bash
+python scripts/stop_all.py
+```
+
+### 6. 安全验收
+
+人工检查以下约束：
+
+- 协调器不读取 `data/p1_params.json`、`data/p2_params.json`、`data/p3_params.json`。
+- HTTP 消息只发送秘密份额 `payload`，不发送原始参数 `values`。
+- 日志只记录 `round_id`、`party_id`、消息类型、向量长度和状态，不打印完整参数或完整份额。
+- `digest` 是 SHA-256 完整性校验，不是数字签名或身份认证机制。
+
+### 7. 常见运行问题
+
+端口被占用时可能看到 `address already in use`，先执行：
+
+```bash
+python scripts/stop_all.py
+```
+
+如果仍然失败，需要关闭占用 `8000`、`8101`、`8102`、`8103` 的其他程序。
+
+如果出现 `ModuleNotFoundError`，通常是没有激活虚拟环境或没有安装依赖：
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+如果出现 `service is not reachable`，先确认服务已启动，再查看 `logs/` 下的服务日志。
 
 ## HTTP 接口
 
@@ -319,12 +429,12 @@ index 1 -> P2
 index 2 -> P3
 ```
 
-## 测试
+## 测试与自动化验收
 
 运行全部测试：
 
 ```bash
-pytest
+PYTHONDONTWRITEBYTECODE=1 python -m pytest
 ```
 
 按模块运行：
@@ -334,6 +444,8 @@ pytest tests/unit
 pytest tests/integration
 pytest tests/security
 ```
+
+在限制本地 socket 的沙箱中，HTTP 集成测试会自动跳过；在普通本机环境中，它们会启动真实本地 HTTP 服务并验证完整网络流程。
 
 最低测试范围包括：
 
@@ -391,7 +503,9 @@ pytest tests/security
 - 安全结果与明文结果误差不超过 `1e-5`。
 - 维度错误、重复消息、错误摘要和超时能够被明确处理。
 - 所有单元测试、集成测试和安全测试通过。
-- `python scripts/run_demo.py` 能够输出 `PASS`。
+- `python scripts/start_all.py` 能启动四个服务。
+- `python scripts/run_demo.py` 能输出 `Result: PASS`。
+- `python scripts/stop_all.py` 能停止后台服务。
 
 ## 参考文档
 
