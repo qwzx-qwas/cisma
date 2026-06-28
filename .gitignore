@@ -1,2 +1,3 @@
 logs/*.log
 .secure_agg_pids.json
+.venv/
