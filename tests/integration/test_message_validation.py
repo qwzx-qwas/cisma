@@ -118,7 +118,7 @@ def test_share_message_payload_out_of_range_rejected() -> None:
             sender_id="P1",
             receiver_id="P2",
             vector_length=1,
-            payload=[PRIME],  # 超出有限域范围
+            payload=[PRIME],
             digest="abc",
         )
 
@@ -201,7 +201,7 @@ def test_digest_is_sha256() -> None:
     digest = compute_payload_digest([1, 2, 3])
     assert isinstance(digest, str)
     assert len(digest) == 64
-    int(digest, 16)  # must be valid hex
+    int(digest, 16)
 
 
 def test_digest_empty_list() -> None:

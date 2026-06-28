@@ -18,7 +18,8 @@ from secure_agg.crypto.secret_sharing import split_vector
 from secure_agg.exceptions import DimensionMismatchError, InvalidShareError
 
 
-def _secure_aggregate(parameter_vectors: list[list[float]]):
+def _secure_aggregate(parameter_vectors):
+    """Run the full secure aggregation pipeline and return the result."""
     per_sender_shares = [split_vector(encode_vector(values)) for values in parameter_vectors]
     aggregate_shares = []
     for party_index in range(PARTY_COUNT):
@@ -31,7 +32,6 @@ def _secure_aggregate(parameter_vectors: list[list[float]]):
 
 def test_plaintext_sum_and_average() -> None:
     vectors = [[1.0, 2.0], [3.0, 4.0], [-1.0, 0.5]]
-
     assert plaintext_sum(vectors) == pytest.approx([3.0, 6.5])
     assert plaintext_average(vectors) == pytest.approx([1.0, 2.1666666667])
 
@@ -78,7 +78,6 @@ def test_secure_aggregation_matches_plaintext_baseline() -> None:
     """三个聚合份额恢复 — 与明文基线一致"""
     vectors = [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0]]
     result = _secure_aggregate(vectors)
-
     assert result.sum_values == pytest.approx(plaintext_sum(vectors), abs=1e-5)
     assert result.average_values == pytest.approx(plaintext_average(vectors), abs=1e-5)
     assert result.participant_count == PARTY_COUNT
@@ -100,7 +99,6 @@ def test_secure_aggregation_zeros() -> None:
 
 
 def test_secure_aggregation_single_element() -> None:
-    """单元素向量"""
     result = _secure_aggregate([[1.0], [2.0], [3.0]])
     assert result.sum_values == pytest.approx([6.0], abs=1e-5)
 
@@ -111,14 +109,15 @@ def test_secure_aggregation_accuracy_within_tolerance() -> None:
     p2 = [4.567890, -5.678901, 6.789012]
     p3 = [7.890123, -8.901234, 9.012345]
     result = _secure_aggregate([p1, p2, p3])
-
     expected_sum = [p1[i] + p2[i] + p3[i] for i in range(3)]
     expected_avg = [v / 3 for v in expected_sum]
+    for secured, expected in zip(result.sum_values, expected_sum):
+        assert abs(secured - expected) <= 1e-5
+    for secured, expected in zip(result.average_values, expected_avg):
+        assert abs(secured - expected) <= 1e-5
 
-    for secure, expected in zip(result.sum_values, expected_sum):
-        assert abs(secure - expected) <= 1e-5, f"sum {secure} != {expected}"
-    for secure, expected in zip(result.average_values, expected_avg):
-        assert abs(secure - expected) <= 1e-5, f"avg {secure} != {expected}"
+    # Also verify the AggregationResult dataclass
+    assert result.participant_count == 3
 
 
 # ── aggregate_received_shares ────────────────────────────────────────
@@ -130,12 +129,10 @@ def test_aggregate_received_shares_basic() -> None:
 
 
 def test_empty_vector_shares_are_supported() -> None:
-    """空数组 — 明确定义行为"""
     assert aggregate_received_shares([[], [], []]) == []
 
 
 def test_aggregate_shares_modular_arithmetic() -> None:
-    """聚合结果在有限域范围内"""
     from secure_agg.constants import PRIME
     large = PRIME - 1
     result = aggregate_received_shares([[large], [10], [5]])
@@ -153,7 +150,7 @@ def test_dimension_mismatch_is_rejected() -> None:
 # ── reconstruct_aggregation ──────────────────────────────────────────
 
 def test_reconstruct_aggregation_basic() -> None:
-    result = reconstruct_aggregation([[1, 2], [3, 4], [5, 6]])
+    result = reconstruct_aggregation([[1, 2], [3, 4], [5, 6]], participant_count=3)
     assert result.sum_values == pytest.approx([9.0, 12.0], abs=1e-5)
     assert result.average_values == pytest.approx([3.0, 4.0], abs=1e-5)
 
@@ -166,9 +163,9 @@ def test_reconstruct_empty_vectors() -> None:
 
 def test_incomplete_shares_are_rejected() -> None:
     with pytest.raises(InvalidShareError):
-        aggregate_received_shares([[1], [2]])
-    with pytest.raises(InvalidShareError):
         reconstruct_aggregation([[1], [2]])
+    with pytest.raises(InvalidShareError):
+        aggregate_received_shares([[1], [2]])
 
 
 def test_reconstruct_dimension_mismatch_raises() -> None:
@@ -205,7 +202,7 @@ def test_secure_aggregation_random_vectors() -> None:
     expected_sum = plaintext_sum([p1, p2, p3])
     expected_avg = plaintext_average([p1, p2, p3])
 
-    for s, e in zip(result.sum_values, expected_sum):
-        assert abs(s - e) <= 1e-5
-    for s, e in zip(result.average_values, expected_avg):
-        assert abs(s - e) <= 1e-5
+    for secured, expected in zip(result.sum_values, expected_sum):
+        assert abs(secured - expected) <= 1e-5
+    for secured, expected in zip(result.average_values, expected_avg):
+        assert abs(secured - expected) <= 1e-5

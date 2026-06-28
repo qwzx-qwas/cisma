@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -85,7 +86,6 @@ def test_save_with_names(tmp_path: Path) -> None:
     target = tmp_path / "out.json"
     save_parameters(params, str(target))
 
-    import json
     with open(target) as f:
         data = json.load(f)
     assert "names" in data
@@ -96,7 +96,6 @@ def test_save_with_names(tmp_path: Path) -> None:
 
 def test_flatten_and_restore_parameter_groups() -> None:
     flat, metadata = flatten_parameters({"w": [1.0, 2.0], "b": [-0.5]})
-
     assert flat == [1.0, 2.0, -0.5]
     assert restore_parameters(flat, metadata) == {"w": [1.0, 2.0], "b": [-0.5]}
 
@@ -145,6 +144,3 @@ def test_validate_same_shape_empty_list() -> None:
 
 def test_validate_same_shape_single_element() -> None:
     validate_same_shape([ModelParameters([1.0], (1,))])
-
-
-import json  # noqa: E402 (needed by test_load_extended_format above)
