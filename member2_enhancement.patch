@@ -1,0 +1,696 @@
+From d31668c4eaf737ab3c553f1dd1ff4d12c272311d Mon Sep 17 00:00:00 2001
+From: member2 <member2@example.com>
+Date: Sun, 28 Jun 2026 20:41:51 +0800
+Subject: [PATCH] test(core): enhance member-2 test coverage to 71 cases
+
+- test_aggregation.py: 6->22 tests (plaintext sum/avg, secure pipeline,
+  empty vectors, zeros, accuracy tolerance, random large vectors)
+- test_model_params.py: 4->17 tests (load/save, extended format,
+  flatten/restore, shape validation edge cases)
+- test_round_state.py: 5->14 tests (state transitions, duplicate/unknown/
+  wrong-length rejection, completed/failed guards, multi-round isolation)
+- test_message_validation.py: 5->18 tests (constant validation, digest
+  check, payload range check, edge cases for all message types)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ tests/integration/test_message_validation.py | 136 ++++++++++++++++-
+ tests/unit/test_aggregation.py               | 150 ++++++++++++++++++-
+ tests/unit/test_model_params.py              | 119 +++++++++++++--
+ tests/unit/test_round_state.py               |  99 +++++++++++-
+ 4 files changed, 484 insertions(+), 20 deletions(-)
+
+diff --git a/tests/integration/test_message_validation.py b/tests/integration/test_message_validation.py
+index 7325719..35d086e 100644
+--- a/tests/integration/test_message_validation.py
++++ b/tests/integration/test_message_validation.py
+@@ -15,6 +15,8 @@ from secure_agg.schemas.messages import (
+ )
+ 
+ 
++# ── RoundCreateRequest ───────────────────────────────────────────────
++
+ def test_round_create_request_validates_constants() -> None:
+     request = RoundCreateRequest(
+         round_id="r1",
+@@ -23,10 +25,44 @@ def test_round_create_request_validates_constants() -> None:
+         scale=SCALE,
+         modulus=PRIME,
+     )
+-
+     assert request.model_dump()["round_id"] == "r1"
+ 
+ 
++def test_round_create_rejects_wrong_scale() -> None:
++    with pytest.raises(ValueError):
++        RoundCreateRequest(
++            round_id="r1",
++            participant_ids=["P1"],
++            vector_length=1,
++            scale=999,
++            modulus=PRIME,
++        )
++
++
++def test_round_create_rejects_wrong_modulus() -> None:
++    with pytest.raises(ValueError):
++        RoundCreateRequest(
++            round_id="r1",
++            participant_ids=["P1"],
++            vector_length=1,
++            scale=SCALE,
++            modulus=999,
++        )
++
++
++def test_round_create_empty_participants_rejected() -> None:
++    with pytest.raises(ValueError):
++        RoundCreateRequest(
++            round_id="r1",
++            participant_ids=[],
++            vector_length=1,
++            scale=SCALE,
++            modulus=PRIME,
++        )
++
++
++# ── ShareMessage ─────────────────────────────────────────────────────
++
+ def test_share_message_accepts_valid_digest() -> None:
+     payload = [1, 2, 3]
+     message = ShareMessage(
+@@ -37,7 +73,6 @@ def test_share_message_accepts_valid_digest() -> None:
+         payload=payload,
+         digest=compute_payload_digest(payload),
+     )
+-
+     assert message.payload == payload
+ 
+ 
+@@ -53,6 +88,55 @@ def test_share_message_rejects_tampered_payload_digest() -> None:
+         )
+ 
+ 
++def test_share_message_empty_payload() -> None:
++    msg = ShareMessage(
++        round_id="r1",
++        sender_id="P1",
++        receiver_id="P2",
++        vector_length=0,
++        payload=[],
++        digest=compute_payload_digest([]),
++    )
++    assert msg.payload == []
++
++
++def test_share_message_missing_field_rejected() -> None:
++    with pytest.raises((ValueError, TypeError)):
++        ShareMessage(  # type: ignore
++            round_id="r1",
++            sender_id="P1",
++            vector_length=3,
++            payload=[1, 2, 3],
++            digest="abc",
++        )
++
++
++def test_share_message_payload_out_of_range_rejected() -> None:
++    with pytest.raises(ValueError):
++        ShareMessage(
++            round_id="r1",
++            sender_id="P1",
++            receiver_id="P2",
++            vector_length=1,
++            payload=[PRIME],  # 超出有限域范围
++            digest="abc",
++        )
++
++
++# ── AggregateShareMessage ────────────────────────────────────────────
++
++def test_aggregate_share_message_basic() -> None:
++    payload = [100, 200, 300]
++    msg = AggregateShareMessage(
++        round_id="r1",
++        party_id="P1",
++        vector_length=3,
++        payload=payload,
++        digest=compute_payload_digest(payload),
++    )
++    assert msg.party_id == "P1"
++
++
+ def test_aggregate_share_message_rejects_vector_length_mismatch() -> None:
+     payload = [1, 2]
+     with pytest.raises(ValueError):
+@@ -65,6 +149,30 @@ def test_aggregate_share_message_rejects_vector_length_mismatch() -> None:
+         )
+ 
+ 
++def test_aggregate_share_message_rejects_bad_digest() -> None:
++    with pytest.raises(ValueError):
++        AggregateShareMessage(
++            round_id="r1",
++            party_id="P1",
++            vector_length=2,
++            payload=[1, 2],
++            digest="badhash",
++        )
++
++
++# ── AggregationResultMessage ─────────────────────────────────────────
++
++def test_aggregation_result_message_completed() -> None:
++    msg = AggregationResultMessage(
++        round_id="r1",
++        sum_values=[6.0, 12.0],
++        average_values=[2.0, 4.0],
++        participant_count=3,
++        status="completed",
++    )
++    assert msg.status == "completed"
++
++
+ def test_result_message_requires_matching_result_lengths() -> None:
+     with pytest.raises(ValueError):
+         AggregationResultMessage(
+@@ -74,3 +182,27 @@ def test_result_message_requires_matching_result_lengths() -> None:
+             participant_count=3,
+             status="completed",
+         )
++
++
++# ── compute_payload_digest ───────────────────────────────────────────
++
++def test_digest_consistency() -> None:
++    payload = [1, 2, 3, 1000, -5]
++    d1 = compute_payload_digest(payload)
++    d2 = compute_payload_digest(payload)
++    assert d1 == d2
++
++
++def test_digest_changes_with_payload() -> None:
++    assert compute_payload_digest([1, 2, 3]) != compute_payload_digest([1, 2, 4])
++
++
++def test_digest_is_sha256() -> None:
++    digest = compute_payload_digest([1, 2, 3])
++    assert isinstance(digest, str)
++    assert len(digest) == 64
++    int(digest, 16)  # must be valid hex
++
++
++def test_digest_empty_list() -> None:
++    assert len(compute_payload_digest([])) == 64
+diff --git a/tests/unit/test_aggregation.py b/tests/unit/test_aggregation.py
+index 8a881df..5b8fe80 100644
+--- a/tests/unit/test_aggregation.py
++++ b/tests/unit/test_aggregation.py
+@@ -11,6 +11,7 @@ from secure_agg.core.aggregation import (
+     plaintext_average,
+     plaintext_sum,
+     reconstruct_aggregation,
++    AggregationResult,
+ )
+ from secure_agg.crypto.fixed_point import encode_vector
+ from secure_agg.crypto.secret_sharing import split_vector
+@@ -26,6 +27,8 @@ def _secure_aggregate(parameter_vectors: list[list[float]]):
+     return reconstruct_aggregation(aggregate_shares)
+ 
+ 
++# ── Plaintext sum / average ──────────────────────────────────────────
++
+ def test_plaintext_sum_and_average() -> None:
+     vectors = [[1.0, 2.0], [3.0, 4.0], [-1.0, 0.5]]
+ 
+@@ -33,9 +36,47 @@ def test_plaintext_sum_and_average() -> None:
+     assert plaintext_average(vectors) == pytest.approx([1.0, 2.1666666667])
+ 
+ 
++def test_plaintext_sum_three_parties_standard() -> None:
++    """三组明文参数求和 — 结果正确"""
++    p1, p2, p3 = [1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0]
++    assert plaintext_sum([p1, p2, p3]) == [6.0, 12.0, 18.0]
++
++
++def test_plaintext_average_three_parties_standard() -> None:
++    """三组明文参数平均 — 结果正确"""
++    p1, p2, p3 = [1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0]
++    assert plaintext_average([p1, p2, p3]) == [2.0, 4.0, 6.0]
++
++
++def test_plaintext_empty_list() -> None:
++    """空数组 — 明确定义行为"""
++    assert plaintext_sum([]) == []
++    assert plaintext_average([]) == []
++
++
++def test_plaintext_single_party() -> None:
++    assert plaintext_sum([[10.0, 20.0]]) == [10.0, 20.0]
++    assert plaintext_average([[10.0, 20.0]]) == [10.0, 20.0]
++
++
++def test_plaintext_all_zeros() -> None:
++    assert plaintext_sum([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]) == [0.0, 0.0]
++    assert plaintext_average([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]) == [0.0, 0.0]
++
++
++def test_plaintext_dimension_mismatch() -> None:
++    """参数长度不同 — 抛出维度异常"""
++    with pytest.raises(DimensionMismatchError):
++        plaintext_sum([[1.0], [1.0, 2.0]])
++    with pytest.raises(DimensionMismatchError):
++        plaintext_average([[1.0], [1.0, 2.0]])
++
++
++# ── Secure aggregation (full pipeline) ───────────────────────────────
++
+ def test_secure_aggregation_matches_plaintext_baseline() -> None:
++    """三个聚合份额恢复 — 与明文基线一致"""
+     vectors = [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0]]
+-
+     result = _secure_aggregate(vectors)
+ 
+     assert result.sum_values == pytest.approx(plaintext_sum(vectors), abs=1e-5)
+@@ -44,19 +85,62 @@ def test_secure_aggregation_matches_plaintext_baseline() -> None:
+ 
+ 
+ def test_secure_aggregation_handles_mixed_signs_and_decimals() -> None:
++    """正负小数混合 — 正确处理"""
+     vectors = [[-1.5, 2.25], [3.0, -4.5], [0.5, 1.25]]
+-
+     result = _secure_aggregate(vectors)
+-
+     assert result.sum_values == pytest.approx([2.0, -1.0], abs=1e-5)
+     assert result.average_values == pytest.approx([0.666667, -0.333333], abs=1e-5)
+ 
+ 
++def test_secure_aggregation_zeros() -> None:
++    """全零参数 — 正确处理"""
++    result = _secure_aggregate([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
++    assert result.sum_values == [0.0, 0.0]
++    assert result.average_values == [0.0, 0.0]
++
++
++def test_secure_aggregation_single_element() -> None:
++    """单元素向量"""
++    result = _secure_aggregate([[1.0], [2.0], [3.0]])
++    assert result.sum_values == pytest.approx([6.0], abs=1e-5)
++
++
++def test_secure_aggregation_accuracy_within_tolerance() -> None:
++    """安全聚合结果与明文基线误差不超过 1e-5"""
++    p1 = [1.234567, -2.345678, 3.456789]
++    p2 = [4.567890, -5.678901, 6.789012]
++    p3 = [7.890123, -8.901234, 9.012345]
++    result = _secure_aggregate([p1, p2, p3])
++
++    expected_sum = [p1[i] + p2[i] + p3[i] for i in range(3)]
++    expected_avg = [v / 3 for v in expected_sum]
++
++    for secure, expected in zip(result.sum_values, expected_sum):
++        assert abs(secure - expected) <= 1e-5, f"sum {secure} != {expected}"
++    for secure, expected in zip(result.average_values, expected_avg):
++        assert abs(secure - expected) <= 1e-5, f"avg {secure} != {expected}"
++
++
++# ── aggregate_received_shares ────────────────────────────────────────
++
++def test_aggregate_received_shares_basic() -> None:
++    """三组秘密份额本地聚合 — 结果维度正确"""
++    result = aggregate_received_shares([[10, 20, 30], [5, 15, 25], [3, 7, 11]])
++    assert result == [18, 42, 66]
++
++
+ def test_empty_vector_shares_are_supported() -> None:
++    """空数组 — 明确定义行为"""
+     assert aggregate_received_shares([[], [], []]) == []
+-    result = reconstruct_aggregation([[], [], []])
+-    assert result.sum_values == []
+-    assert result.average_values == []
++
++
++def test_aggregate_shares_modular_arithmetic() -> None:
++    """聚合结果在有限域范围内"""
++    from secure_agg.constants import PRIME
++    large = PRIME - 1
++    result = aggregate_received_shares([[large], [10], [5]])
++    assert 0 <= result[0] < PRIME
++    assert result[0] == (large + 10 + 5) % PRIME
+ 
+ 
+ def test_dimension_mismatch_is_rejected() -> None:
+@@ -66,8 +150,62 @@ def test_dimension_mismatch_is_rejected() -> None:
+         aggregate_received_shares([[1], [2, 3], [4]])
+ 
+ 
++# ── reconstruct_aggregation ──────────────────────────────────────────
++
++def test_reconstruct_aggregation_basic() -> None:
++    result = reconstruct_aggregation([[1, 2], [3, 4], [5, 6]])
++    assert result.sum_values == pytest.approx([9.0, 12.0], abs=1e-5)
++    assert result.average_values == pytest.approx([3.0, 4.0], abs=1e-5)
++
++
++def test_reconstruct_empty_vectors() -> None:
++    result = reconstruct_aggregation([[], [], []])
++    assert result.sum_values == []
++    assert result.average_values == []
++
++
+ def test_incomplete_shares_are_rejected() -> None:
+     with pytest.raises(InvalidShareError):
+         aggregate_received_shares([[1], [2]])
+     with pytest.raises(InvalidShareError):
+         reconstruct_aggregation([[1], [2]])
++
++
++def test_reconstruct_dimension_mismatch_raises() -> None:
++    with pytest.raises(DimensionMismatchError):
++        reconstruct_aggregation([[1, 2], [1, 2, 3]])
++
++
++# ── AggregationResult dataclass ──────────────────────────────────────
++
++def test_aggregation_result_dataclass() -> None:
++    result = AggregationResult(
++        encoded_sum=[6],
++        sum_values=[6.0],
++        average_values=[2.0],
++        participant_count=3,
++    )
++    assert result.encoded_sum == [6]
++    assert result.sum_values == [6.0]
++    assert result.average_values == [2.0]
++    assert result.participant_count == 3
++
++
++# ── Large random test ────────────────────────────────────────────────
++
++def test_secure_aggregation_random_vectors() -> None:
++    """随机大向量测试 — 安全聚合与明文基线一致"""
++    import random
++    random.seed(42)
++    p1 = [random.uniform(-10, 10) for _ in range(50)]
++    p2 = [random.uniform(-10, 10) for _ in range(50)]
++    p3 = [random.uniform(-10, 10) for _ in range(50)]
++
++    result = _secure_aggregate([p1, p2, p3])
++    expected_sum = plaintext_sum([p1, p2, p3])
++    expected_avg = plaintext_average([p1, p2, p3])
++
++    for s, e in zip(result.sum_values, expected_sum):
++        assert abs(s - e) <= 1e-5
++    for s, e in zip(result.average_values, expected_avg):
++        assert abs(s - e) <= 1e-5
+diff --git a/tests/unit/test_model_params.py b/tests/unit/test_model_params.py
+index 1251ccb..209d092 100644
+--- a/tests/unit/test_model_params.py
++++ b/tests/unit/test_model_params.py
+@@ -16,6 +16,28 @@ from secure_agg.core.model_params import (
+ from secure_agg.exceptions import DimensionMismatchError
+ 
+ 
++# ── ModelParameters dataclass ────────────────────────────────────────
++
++def test_create_parameters() -> None:
++    params = ModelParameters(values=[1.0, 2.0, 3.0], shape=(3,))
++    assert params.values == [1.0, 2.0, 3.0]
++    assert params.shape == (3,)
++    assert params.names is None
++
++
++def test_create_with_names() -> None:
++    params = ModelParameters(values=[1.0, 2.0], shape=(2,), names=("weight", "bias"))
++    assert params.names == ("weight", "bias")
++
++
++def test_frozen_dataclass() -> None:
++    params = ModelParameters(values=[1.0], shape=(1,))
++    with pytest.raises(AttributeError):
++        params.values = [2.0]  # type: ignore
++
++
++# ── Load / Save ──────────────────────────────────────────────────────
++
+ def test_load_and_save_basic_parameter_file(tmp_path: Path) -> None:
+     source = tmp_path / "params.json"
+     source.write_text('{"shape": [3], "values": [1.0, -2.5, 0.0]}', encoding="utf-8")
+@@ -28,26 +50,101 @@ def test_load_and_save_basic_parameter_file(tmp_path: Path) -> None:
+     assert load_parameters(str(target)) == parameters
+ 
+ 
+-def test_flatten_and_restore_parameter_groups() -> None:
+-    flat, metadata = flatten_parameters({"w": [1.0, 2.0], "b": [-0.5]})
++def test_load_extended_format(tmp_path: Path) -> None:
++    """测试加载扩展格式（多层参数字典）"""
++    data = {"layers": {"layer1.weight": [1.0, 2.0], "layer1.bias": [0.1], "layer2.weight": [3.0, 4.0]}}
++    source = tmp_path / "extended.json"
++    source.write_text(json.dumps(data), encoding="utf-8")
+ 
+-    assert flat == [1.0, 2.0, -0.5]
+-    assert restore_parameters(flat, metadata) == {"w": [1.0, 2.0], "b": [-0.5]}
++    params = load_parameters(str(source))
++    assert params.values == [1.0, 2.0, 0.1, 3.0, 4.0]
++    assert params.shape == (5,)
++
++
++def test_load_nonexistent_file() -> None:
++    with pytest.raises(FileNotFoundError):
++        load_parameters("/nonexistent/path.json")
++
++
++def test_load_invalid_json(tmp_path: Path) -> None:
++    source = tmp_path / "bad.json"
++    source.write_text("not json", encoding="utf-8")
++    with pytest.raises(json.JSONDecodeError):
++        load_parameters(str(source))
+ 
+ 
+ def test_load_rejects_shape_mismatch(tmp_path: Path) -> None:
+     source = tmp_path / "bad.json"
+     source.write_text('{"shape": [2], "values": [1.0]}', encoding="utf-8")
+-
+     with pytest.raises(DimensionMismatchError):
+         load_parameters(str(source))
+ 
+ 
++def test_save_with_names(tmp_path: Path) -> None:
++    params = ModelParameters(values=[1.0, 2.0], shape=(2,), names=("weight",))
++    target = tmp_path / "out.json"
++    save_parameters(params, str(target))
++
++    import json
++    with open(target) as f:
++        data = json.load(f)
++    assert "names" in data
++    assert data["names"] == ["weight"]
++
++
++# ── Flatten / Restore ────────────────────────────────────────────────
++
++def test_flatten_and_restore_parameter_groups() -> None:
++    flat, metadata = flatten_parameters({"w": [1.0, 2.0], "b": [-0.5]})
++
++    assert flat == [1.0, 2.0, -0.5]
++    assert restore_parameters(flat, metadata) == {"w": [1.0, 2.0], "b": [-0.5]}
++
++
++def test_flatten_multi_groups() -> None:
++    groups = {"layer1.weight": [1.0, 2.0], "layer1.bias": [0.5], "layer2.weight": [3.0, 4.0, 5.0]}
++    flat, metadata = flatten_parameters(groups)
++    assert flat == [1.0, 2.0, 0.5, 3.0, 4.0, 5.0]
++    assert metadata["names"] == ["layer1.weight", "layer1.bias", "layer2.weight"]
++
++
++def test_flatten_empty_groups() -> None:
++    with pytest.raises(ValueError):
++        flatten_parameters({})
++
++
++def test_restore_roundtrip() -> None:
++    original = {"a": [1.0, 2.0], "b": [3.0], "c": [4.0, 5.0, 6.0]}
++    flat, metadata = flatten_parameters(original)
++    restored = restore_parameters(flat, metadata)
++    assert restored == original
++
++
++# ── validate_same_shape ──────────────────────────────────────────────
++
++def test_validate_same_shape_passes() -> None:
++    validate_same_shape([
++        ModelParameters([1.0, 2.0], (2,)),
++        ModelParameters([3.0, 4.0], (2,)),
++        ModelParameters([5.0, 6.0], (2,)),
++    ])
++
++
+ def test_validate_same_shape_rejects_different_lengths() -> None:
+     with pytest.raises(DimensionMismatchError):
+-        validate_same_shape(
+-            [
+-                ModelParameters([1.0, 2.0], (2,)),
+-                ModelParameters([1.0], (1,)),
+-            ]
+-        )
++        validate_same_shape([
++            ModelParameters([1.0, 2.0], (2,)),
++            ModelParameters([1.0], (1,)),
++        ])
++
++
++def test_validate_same_shape_empty_list() -> None:
++    """空参数列表 — 明确定义行为"""
++    validate_same_shape([])
++
++
++def test_validate_same_shape_single_element() -> None:
++    validate_same_shape([ModelParameters([1.0], (1,))])
++
++
++import json  # noqa: E402 (needed by test_load_extended_format above)
+diff --git a/tests/unit/test_round_state.py b/tests/unit/test_round_state.py
+index 9829103..7dc9ec6 100644
+--- a/tests/unit/test_round_state.py
++++ b/tests/unit/test_round_state.py
+@@ -14,7 +14,24 @@ from secure_agg.exceptions import (
+ )
+ 
+ 
++# ── Initial state ────────────────────────────────────────────────────
++
++def test_initial_state() -> None:
++    """轮次初始状态正确"""
++    r = AggregationRound("r1", ("P1", "P2", "P3"), 3)
++    assert r.round_id == "r1"
++    assert r.participant_ids == ("P1", "P2", "P3")
++    assert r.vector_length == 3
++    assert r.status == RoundStatus.CREATED
++    assert r.received_shares == {}
++    assert r.aggregate_shares == {}
++    assert r.error_message is None
++
++
++# ── Received share transitions ───────────────────────────────────────
++
+ def test_received_share_state_transitions() -> None:
++    """轮次状态转换 — 符合状态机"""
+     round_state = AggregationRound("r1", ("P1", "P2", "P3"), 2)
+ 
+     round_state.add_received_share("P1", [1, 2])
+@@ -26,7 +43,10 @@ def test_received_share_state_transitions() -> None:
+     assert round_state.status == RoundStatus.SHARES_READY
+ 
+ 
++# ── Validation errors ────────────────────────────────────────────────
++
+ def test_duplicate_unknown_and_wrong_length_are_rejected() -> None:
++    """重复提交 — 拒绝；未知参与方提交 — 拒绝"""
+     round_state = AggregationRound("r1", ("P1", "P2", "P3"), 2)
+     round_state.add_received_share("P1", [1, 2])
+ 
+@@ -38,6 +58,15 @@ def test_duplicate_unknown_and_wrong_length_are_rejected() -> None:
+         round_state.add_received_share("P2", [1])
+ 
+ 
++def test_wrong_vector_length_rejected() -> None:
++    """错误向量长度 — 拒绝"""
++    r = AggregationRound("r1", ("P1", "P2"), 5)
++    with pytest.raises(DimensionMismatchError):
++        r.add_received_share("P1", [1, 2])
++
++
++# ── Aggregate shares ─────────────────────────────────────────────────
++
+ def test_aggregate_shares_can_complete_round() -> None:
+     round_state = AggregationRound("r1", ("P1", "P2", "P3"), 0)
+ 
+@@ -50,7 +79,32 @@ def test_aggregate_shares_can_complete_round() -> None:
+     assert round_state.status == RoundStatus.COMPLETED
+ 
+ 
++def test_duplicate_aggregate_share_rejected() -> None:
++    """聚合份额重复提交 — 拒绝"""
++    r = AggregationRound("r1", ("P1", "P2"), 2)
++    r.add_aggregate_share("P1", [1, 2])
++    with pytest.raises(DuplicateMessageError):
++        r.add_aggregate_share("P1", [3, 4])
++
++
++def test_unknown_participant_aggregate_rejected() -> None:
++    """未知参与方聚合份额 — 拒绝"""
++    r = AggregationRound("r1", ("P1", "P2"), 2)
++    with pytest.raises(UnknownParticipantError):
++        r.add_aggregate_share("P4", [1, 2])
++
++
++def test_wrong_length_aggregate_rejected() -> None:
++    """错误长度的聚合份额 — 拒绝"""
++    r = AggregationRound("r1", ("P1", "P2"), 3)
++    with pytest.raises(DimensionMismatchError):
++        r.add_aggregate_share("P1", [1, 2])
++
++
++# ── Complete / Fail state guards ─────────────────────────────────────
++
+ def test_completed_and_failed_rounds_reject_writes() -> None:
++    """已完成轮次再次写入 — 拒绝"""
+     completed = AggregationRound("r1", ("P1", "P2", "P3"), 0)
+     completed.add_aggregate_share("P1", [])
+     completed.add_aggregate_share("P2", [])
+@@ -66,8 +120,51 @@ def test_completed_and_failed_rounds_reject_writes() -> None:
+         failed.add_received_share("P1", [])
+ 
+ 
++def test_fail_marks_round_with_message() -> None:
++    r = AggregationRound("r1", ("P1", "P2"), 2)
++    r.fail("timeout")
++    assert r.status == RoundStatus.FAILED
++    assert r.error_message == "timeout"
++
++
++def test_failed_round_cannot_complete() -> None:
++    r = AggregationRound("r1", ("P1", "P2"), 2)
++    r.fail("error")
++    with pytest.raises(InvalidRoundStateError):
++        r.complete()
++
++
++# ── Wrong round id ───────────────────────────────────────────────────
++
+ def test_wrong_round_id_is_rejected() -> None:
++    """错误轮次提交 — 拒绝"""
+     round_state = AggregationRound("r1", ("P1", "P2", "P3"), 1)
+-
+     with pytest.raises(InvalidRoundStateError):
+         round_state.validate_round_id("r2")
++
++
++# ── Multi-round isolation ────────────────────────────────────────────
++
++def test_multiple_rounds_independent() -> None:
++    """多个轮次状态独立"""
++    r1 = AggregationRound("r1", ("P1",), 2)
++    r2 = AggregationRound("r2", ("P1", "P2"), 3)
++
++    r1.add_received_share("P1", [1, 2])
++    assert "P1" in r1.received_shares
++    assert r2.received_shares == {}
++
++    r2.add_received_share("P1", [3, 4, 5])
++    assert r1.received_shares["P1"] == [1, 2]
++    assert r2.received_shares["P1"] == [3, 4, 5]
++
++
++# ── Status enum ──────────────────────────────────────────────────────
++
++def test_status_enum_values() -> None:
++    assert RoundStatus.CREATED.value == "created"
++    assert RoundStatus.COLLECTING_SHARES.value == "collecting_shares"
++    assert RoundStatus.SHARES_READY.value == "shares_ready"
++    assert RoundStatus.AGGREGATED.value == "aggregated"
++    assert RoundStatus.COMPLETED.value == "completed"
++    assert RoundStatus.FAILED.value == "failed"
+-- 
+2.25.1
+
