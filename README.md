@@ -1,6 +1,6 @@
 # 基于秘密分享的三方模型参数安全聚合系统
 
-这是一个教学与实验用途的三方模型参数安全聚合系统。系统使用三方加法秘密分享、定点数编码和有限域运算，在不直接暴露各参与方原始模型参数的前提下，计算三方模型参数的求和结果与平均结果。
+这是一个教学与实验用途的三方联邦学习安全多方计算聚合系统。系统先在 P1、P2、P3 三个客户端上进行本地线性模型训练，再使用三方加法秘密分享、定点数编码和有限域运算，在不直接暴露各参与方原始模型参数的前提下，安全聚合本地模型参数并更新全局模型。
 
 > 本项目面向课程实验和协议演示，不可直接用于生产环境。
 
@@ -31,6 +31,38 @@ average = (x1 + x2 + x3) / 3
 - 三个聚合份额组合后能够恢复正确聚合结果。
 - 支持正数、负数、小数和向量参数。
 - 能检测维度错误、重复消息、参与方缺失和通信超时。
+
+## 任务 12 对应关系
+
+本项目实现“联邦学习安全多方计算聚合”的端到端实验流程：
+
+- 联邦学习：P1、P2、P3 各自持有本地训练数据，分别完成本地线性模型训练。
+- 安全多方计算：本地模型参数先定点编码并拆分为秘密份额，通信过程中只交换份额。
+- 聚合输出：协调器恢复聚合后的全局模型参数总和与平均值，并用平均参数更新全局模型。
+- 协议：三方加法秘密分享，在有限域 `P = 2^61 - 1` 中完成份额加法。
+- 场景：跨机构协作中，参与方不直接发送明文数据或明文模型参数。
+
+核心接口位于 `src/secure_agg/core/federated_mpc.py`：
+
+```python
+encrypt_model_parameters(party_id, parameter_values)
+aggregate_encrypted_model_parameters(encrypted_parameters)
+```
+
+联邦学习闭环位于 `src/secure_agg/core/federated_learning.py`：
+
+```python
+run_secure_federated_training(initial_parameters, datasets)
+```
+
+HTTP 实验通信位于 `src/secure_agg/network/` 和 `scripts/run_demo.py`，用于演示 P1、P2、P3 与 Coordinator 之间的份额分发、聚合份额提交和结果恢复。
+
+可使用以下命令验收联邦学习训练与安全聚合：
+
+```bash
+python scripts/run_fl_demo.py
+pytest -q tests/unit/test_federated_learning.py tests/unit/test_federated_mpc.py
+```
 
 ## 技术方案
 
