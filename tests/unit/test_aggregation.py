@@ -49,9 +49,11 @@ def test_plaintext_average_three_parties_standard() -> None:
 
 
 def test_plaintext_empty_list() -> None:
-    """空数组 — 明确定义行为"""
-    assert plaintext_sum([]) == []
-    assert plaintext_average([]) == []
+    """空参数集合 — 拒绝"""
+    with pytest.raises(InvalidShareError):
+        plaintext_sum([])
+    with pytest.raises(InvalidShareError):
+        plaintext_average([])
 
 
 def test_plaintext_single_party() -> None:
@@ -150,7 +152,12 @@ def test_dimension_mismatch_is_rejected() -> None:
 # ── reconstruct_aggregation ──────────────────────────────────────────
 
 def test_reconstruct_aggregation_basic() -> None:
-    result = reconstruct_aggregation([[1, 2], [3, 4], [5, 6]], participant_count=3)
+    aggregate_shares = [
+        encode_vector([1.0, 2.0]),
+        encode_vector([3.0, 4.0]),
+        encode_vector([5.0, 6.0]),
+    ]
+    result = reconstruct_aggregation(aggregate_shares, participant_count=3)
     assert result.sum_values == pytest.approx([9.0, 12.0], abs=1e-5)
     assert result.average_values == pytest.approx([3.0, 4.0], abs=1e-5)
 
@@ -170,7 +177,7 @@ def test_incomplete_shares_are_rejected() -> None:
 
 def test_reconstruct_dimension_mismatch_raises() -> None:
     with pytest.raises(DimensionMismatchError):
-        reconstruct_aggregation([[1, 2], [1, 2, 3]])
+        reconstruct_aggregation([[1, 2], [1, 2, 3], [1, 2]])
 
 
 # ── AggregationResult dataclass ──────────────────────────────────────
