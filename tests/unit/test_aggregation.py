@@ -150,7 +150,12 @@ def test_dimension_mismatch_is_rejected() -> None:
 # ── reconstruct_aggregation ──────────────────────────────────────────
 
 def test_reconstruct_aggregation_basic() -> None:
-    result = reconstruct_aggregation([[1, 2], [3, 4], [5, 6]], participant_count=3)
+    encoded_shares = [
+        encode_vector([1.0, 2.0]),
+        encode_vector([3.0, 4.0]),
+        encode_vector([5.0, 6.0]),
+    ]
+    result = reconstruct_aggregation(encoded_shares, participant_count=3)
     assert result.sum_values == pytest.approx([9.0, 12.0], abs=1e-5)
     assert result.average_values == pytest.approx([3.0, 4.0], abs=1e-5)
 

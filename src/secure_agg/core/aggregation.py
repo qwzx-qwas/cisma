@@ -35,6 +35,9 @@ def plaintext_sum(
     parameter_vectors: list[list[float]],
 ) -> list[float]:
     """Compute an element-wise plaintext sum baseline."""
+    if not parameter_vectors:
+        return []
+
     _validate_same_length(parameter_vectors, "parameter vectors")
     if not parameter_vectors[0]:
         return []
@@ -49,6 +52,9 @@ def plaintext_average(
     parameter_vectors: list[list[float]],
 ) -> list[float]:
     """Compute an element-wise plaintext average baseline."""
+    if not parameter_vectors:
+        return []
+
     summed = plaintext_sum(parameter_vectors)
     return [value / len(parameter_vectors) for value in summed]
 
@@ -75,10 +81,11 @@ def reconstruct_aggregation(
     """Recover sum and average values from aggregate share vectors."""
     if participant_count <= 0:
         raise ValueError("participant_count must be positive")
+
+    _validate_same_length(aggregate_shares, "aggregate shares")
     if len(aggregate_shares) != participant_count:
         raise InvalidShareError("all aggregate shares must be received before recovery")
 
-    _validate_same_length(aggregate_shares, "aggregate shares")
     encoded_sum = reconstruct_vector(aggregate_shares, PRIME)
     sum_values = decode_vector(encoded_sum)
     average_values = [value / participant_count for value in sum_values]
