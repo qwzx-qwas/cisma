@@ -35,9 +35,6 @@ def plaintext_sum(
     parameter_vectors: list[list[float]],
 ) -> list[float]:
     """Compute an element-wise plaintext sum baseline."""
-    if not parameter_vectors:
-        return []
-
     _validate_same_length(parameter_vectors, "parameter vectors")
     if not parameter_vectors[0]:
         return []
@@ -52,9 +49,6 @@ def plaintext_average(
     parameter_vectors: list[list[float]],
 ) -> list[float]:
     """Compute an element-wise plaintext average baseline."""
-    if not parameter_vectors:
-        return []
-
     summed = plaintext_sum(parameter_vectors)
     return [value / len(parameter_vectors) for value in summed]
 
