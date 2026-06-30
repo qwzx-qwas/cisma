@@ -75,10 +75,11 @@ def reconstruct_aggregation(
     """Recover sum and average values from aggregate share vectors."""
     if participant_count <= 0:
         raise ValueError("participant_count must be positive")
+
+    _validate_same_length(aggregate_shares, "aggregate shares")
     if len(aggregate_shares) != participant_count:
         raise InvalidShareError("all aggregate shares must be received before recovery")
 
-    _validate_same_length(aggregate_shares, "aggregate shares")
     encoded_sum = reconstruct_vector(aggregate_shares, PRIME)
     sum_values = decode_vector(encoded_sum)
     average_values = [value / participant_count for value in sum_values]
